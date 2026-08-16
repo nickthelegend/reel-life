@@ -1,0 +1,19 @@
+{
+  "//": "Offline typecheck of the Lens source against the vendored API subset in typings/. Lens Studio generates its own tsconfig inside the project and ignores this file.",
+  "compilerOptions": {
+    "target": "ES2020",
+    "module": "ES2020",
+    "moduleResolution": "node",
+    "allowSyntheticDefaultImports": true,
+    "lib": ["ES2020"],
+    "strict": true,
+    "strictPropertyInitialization": false,
+    "experimentalDecorators": true,
+    "noUnusedLocals": true,
+    "noImplicitOverride": true,
+    "forceConsistentCasingInFileNames": true,
+    "noEmit": true,
+    "types": []
+  },
+  "include": ["Assets/Scripts/**/*.ts", "typings/**/*.d.ts"]
+}

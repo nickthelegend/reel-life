@@ -1,0 +1,7 @@
+node_modules/
+dist/
+
+# Lens Studio project artifacts, if you save the project into this folder
+Cache/
+*.lsproj.backup
+mcp.json

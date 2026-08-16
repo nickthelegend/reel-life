@@ -1,0 +1,24 @@
+{
+  "name": "reel-life",
+  "version": "0.1.0",
+  "description": "Reel Life — spatial stop-motion animation studio for Snap Spectacles (SPECS).",
+  "directories": {
+    "doc": "docs",
+    "test": "tests"
+  },
+  "scripts": {
+    "typecheck": "tsc -p tsconfig.check.json",
+    "build:tests": "tsc -p tsconfig.test.json",
+    "test": "npm run build:tests && node --test \"dist/tests/*.test.js\"",
+    "verify": "npm run typecheck && npm test"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "commonjs",
+  "devDependencies": {
+    "@types/node": "^26.2.0",
+    "typescript": "^5.9.3"
+  },
+  "private": true
+}

@@ -1,5 +1,7 @@
+import { beatSeconds } from "./BeatGrid.js";
 import { cloneClip, resetTrim, trimmedKeyframes } from "./Clip.js";
-import { cloneKeyframe } from "./PoseTypes.js";
+import { cloneKeyframe, clonePose } from "./PoseTypes.js";
+import { v3Add, v3Scale, v3Sub } from "./Vec.js";
 /**
  * Clip surgery: split, merge, reverse, ping-pong, loop.
  *
@@ -199,4 +201,110 @@ export function isOverlong(clip) {
         return false;
     }
     return frames[frames.length - 1].t - frames[0].t > MAX_CLIP_SECONDS;
+}
+// ---------------------------------------------------------------------------
+// Beat-aware editing
+// ---------------------------------------------------------------------------
+/**
+ * Split a take at every bar line.
+ *
+ * The reel is already locked to a tempo; this makes editing obey it too. A long
+ * take becomes a sequence of bar-length takes you can reorder, and every cut
+ * lands on a downbeat instead of wherever the trim handle happened to be.
+ */
+export function cutToBeat(clip, grid, makeId, beatsPerBar = 4) {
+    const frames = trimmedKeyframes(clip);
+    const bar = beatSeconds(grid) * beatsPerBar;
+    if (frames.length < 2 || bar <= 0) {
+        return [cloneClip(clip, makeId(0))];
+    }
+    const start = frames[0].t;
+    const duration = frames[frames.length - 1].t - start;
+    if (duration <= bar) {
+        return [cloneClip(clip, makeId(0))];
+    }
+    const pieces = [];
+    const barCount = Math.ceil(duration / bar - 1e-9);
+    for (let b = 0; b < barCount; b++) {
+        const from = b * bar;
+        const to = Math.min((b + 1) * bar, duration);
+        // Every keyframe inside the bar, plus the one before it so the piece does
+        // not start mid-move.
+        const inside = frames.filter((f) => {
+            const local = f.t - start;
+            return local >= from - 1e-9 && local <= to + 1e-9;
+        });
+        if (inside.length === 0) {
+            continue;
+        }
+        const piece = cloneClip(clip, makeId(pieces.length));
+        piece.name = `${clip.name} bar ${b + 1}`;
+        piece.caption = b === 0 ? clip.caption : null;
+        piece.keyframes = inside.map((f) => ({
+            t: Number((f.t - start - from).toFixed(6)),
+            joints: clonePose(f.joints),
+        }));
+        // A single-pose bar is a held frame, not a take worth cutting to.
+        if (piece.keyframes.length < 2) {
+            continue;
+        }
+        resetTrim(piece);
+        pieces.push(piece);
+    }
+    return pieces.length > 0 ? pieces : [cloneClip(clip, makeId(0))];
+}
+/**
+ * Turn a held pose into a moving hold.
+ *
+ * A pose held perfectly still reads as the app having frozen. Real animation
+ * keeps a tiny drift going so the character stays alive. This inserts a
+ * midpoint that eases slightly past the held pose and back.
+ *
+ * @param driftCm how far the drift travels, in cm
+ */
+export function addMovingHold(clip, keyframeIndex, newId, driftCm = 0.4) {
+    const out = cloneClip(clip, newId);
+    const a = out.keyframes[keyframeIndex];
+    const b = out.keyframes[keyframeIndex + 1];
+    if (!a || !b || driftCm <= 0) {
+        return null;
+    }
+    const gap = b.t - a.t;
+    if (gap <= 0.02) {
+        return null;
+    }
+    const joints = clonePose(a.joints);
+    for (const jointId in joints) {
+        const from = a.joints[jointId];
+        const to = b.joints[jointId];
+        if (!from || !to) {
+            continue;
+        }
+        // Drift a fixed distance along the direction the pose is already heading,
+        // so the hold breathes toward its next pose rather than wandering.
+        const direction = v3Sub(to.p, from.p);
+        const length = Math.sqrt(direction.x * direction.x + direction.y * direction.y + direction.z * direction.z);
+        if (length < 1e-6) {
+            continue;
+        }
+        joints[jointId].p = v3Add(from.p, v3Scale(direction, driftCm / length));
+    }
+    out.keyframes.splice(keyframeIndex + 1, 0, {
+        t: Number((a.t + gap * 0.5).toFixed(6)),
+        joints,
+    });
+    resetTrim(out);
+    return out;
+}
+/** Keyframe gaps long enough that a dead hold will be visible. */
+export const LONG_HOLD_SECONDS = 0.8;
+export function longHolds(clip) {
+    const frames = trimmedKeyframes(clip);
+    const out = [];
+    for (let i = 1; i < frames.length; i++) {
+        if (frames[i].t - frames[i - 1].t >= LONG_HOLD_SECONDS) {
+            out.push(i - 1);
+        }
+    }
+    return out;
 }

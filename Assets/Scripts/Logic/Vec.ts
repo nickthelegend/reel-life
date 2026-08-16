@@ -119,6 +119,28 @@ export function qSlerp(a: Quat, b: Quat, t: number): Quat {
   });
 }
 
+/**
+ * Hamilton product. `qMultiply(a, b)` is the rotation "apply b, then a" — the
+ * standard convention, and the one the follow-through solver assumes.
+ */
+export function qMultiply(a: Quat, b: Quat): Quat {
+  return {
+    w: a.w * b.w - a.x * b.x - a.y * b.y - a.z * b.z,
+    x: a.w * b.x + a.x * b.w + a.y * b.z - a.z * b.y,
+    y: a.w * b.y - a.x * b.z + a.y * b.w + a.z * b.x,
+    z: a.w * b.z + a.x * b.y - a.y * b.x + a.z * b.w,
+  };
+}
+
+export function qConjugate(a: Quat): Quat {
+  return { x: -a.x, y: -a.y, z: -a.z, w: a.w };
+}
+
+/** Inverse of a rotation. Normalizes first, so drift cannot accumulate. */
+export function qInverse(a: Quat): Quat {
+  return qConjugate(qNormalize(a));
+}
+
 /** Angle between two rotations in radians, 0..PI. */
 export function qAngle(a: Quat, b: Quat): number {
   const dot = Math.abs(qDot(qNormalize(a), qNormalize(b)));

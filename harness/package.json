@@ -1,0 +1,4 @@
+{
+  "//": "Scopes ESM to harness/ only. The repo root stays CommonJS so the CJS test build in dist/ keeps working; Node needs this to import the harness modules and harness/dist directly.",
+  "type": "module"
+}

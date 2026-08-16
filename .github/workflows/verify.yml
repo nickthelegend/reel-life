@@ -1,0 +1,36 @@
+name: verify
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - run: npm ci
+
+      # Typechecks the whole Lens source tree against the vendored API subset
+      # in typings/, then runs the suite.
+      - run: npm run typecheck
+      - run: npm test
+
+      # The harness must still build, and the demo GIF must still render — both
+      # are deliverables, not incidental output.
+      - run: npm run build:harness
+      - run: node tools/render-demo-gif.mjs
+
+      # Audio is generated, so prove it regenerates byte-identically.
+      - name: audio is reproducible
+        run: |
+          shasum -a 256 Assets/Audio/*.wav > /tmp/before.txt
+          node tools/build-audio.mjs
+          shasum -a 256 Assets/Audio/*.wav > /tmp/after.txt
+          diff /tmp/before.txt /tmp/after.txt

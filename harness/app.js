@@ -8,6 +8,8 @@
  */
 import "./platform.js";
 
+import { encodeGif, inspectGif } from "./gif-encoder.js";
+
 import { ReelStore } from "./dist/Character/ReelStore.js";
 import { accentAtKeyframe, buildAccentIndex } from "./dist/Logic/AccentTrack.js";
 import {
@@ -73,7 +75,16 @@ import {
   DEFAULT_SECONDARY_MOTION,
   applySecondaryMotion,
 } from "./dist/Logic/SecondaryMotion.js";
-import { createShootRate, describeShootRate, steppedTime } from "./dist/Logic/Stepped.js";
+import {
+  exposureSheet,
+  nextExposureTime,
+} from "./dist/Logic/ExposureSheet.js";
+import {
+  createShootRate,
+  describeShootRate,
+  holdSeconds,
+  steppedTime,
+} from "./dist/Logic/Stepped.js";
 import { Q_IDENTITY, qFromAxisAngle, v3 } from "./dist/Logic/Vec.js";
 import { isCommand, parseVoiceCommand } from "./dist/Logic/VoiceCommands.js";
 
@@ -700,7 +711,17 @@ function refreshTimeline() {
   });
 
   const selected = selectedClip();
-  $("timeline-readout").textContent =
+  const total = state.timeline.totalDuration();
+  const beat = 60 / state.grid.bpm;
+  const beatCount = beat > 0 && total > 0 ? Math.floor(total / beat) + 1 : 0;
+  const ruler = state.timeline.isEmpty()
+    ? ""
+    : `frames   : ${Math.ceil(total * state.shootRate.fps)} @ ${state.shootRate.fps}fps ` +
+      `(${describeShootRate(state.shootRate)})\n` +
+      `beats    : ${beatCount} @ ${state.grid.bpm} BPM  ` +
+      new Array(Math.min(beatCount, 32)).fill("●").join(" ") + "\n";
+
+  $("timeline-readout").textContent = ruler +
     `clips    : ${state.timeline.clips.map((c) => c.name).join(" → ") || "(none)"}\n` +
     `segments : ${state.timeline
       .segments()
@@ -1090,6 +1111,9 @@ $("btn-retarget").onclick = () => {
   log(`retargeted ${moved.length} take(s) onto ${target.subject}`);
 };
 
+$("btn-export-gif").onclick = exportGif;
+$("btn-export-sheet").onclick = exportContactSheet;
+
 $("btn-play-mood").onclick = () => playMood($("mood-select").value);
 $("btn-stop-music").onclick = () => {
   for (const key in state.audioEls) if (key.indexOf("music:") === 0) state.audioEls[key].pause();
@@ -1131,6 +1155,159 @@ $("btn-clear-storage").onclick = () => {
   log("cleared all stored reels");
   refreshStorage();
 };
+
+// ---------------------------------------------------------------------------
+// Export — render the reel to a watchable artefact
+// ---------------------------------------------------------------------------
+
+const EXPORT_WIDTH = 320;
+const EXPORT_HEIGHT = 210;
+
+/**
+ * Walk the whole reel one exposure at a time and render each to ImageData.
+ *
+ * Sampling is driven by the real timeline and the real shoot rate, so the GIF
+ * shows exactly what playback shows — including the stepping. Each entry
+ * carries the delay that exposure should be held for.
+ */
+function renderReelFrames() {
+  const off = document.createElement("canvas");
+  off.width = EXPORT_WIDTH;
+  off.height = EXPORT_HEIGHT;
+  const octx = off.getContext("2d");
+  const scaleX = EXPORT_WIDTH / canvas.width;
+  const scaleY = EXPORT_HEIGHT / canvas.height;
+
+  const frames = [];
+  const delays = [];
+  const savedPose = state.displayPose;
+  const hold = holdSeconds(state.shootRate);
+  const step = hold > 0 ? hold : 1 / 24;
+
+  for (const segment of state.timeline.segments()) {
+    const clip = state.timeline.get(segment.clipId);
+    if (!clip) continue;
+    const duration = segment.end - segment.start;
+
+    for (let localT = 0; localT < duration - 1e-6; localT += step) {
+      const pose = samplePose(clip, steppedTime(localT, state.shootRate));
+      if (!pose) continue;
+      state.displayPose = pose;
+      draw();
+
+      octx.fillStyle = "#0a0b10";
+      octx.fillRect(0, 0, EXPORT_WIDTH, EXPORT_HEIGHT);
+      octx.save();
+      octx.scale(scaleX, scaleY);
+      octx.drawImage(canvas, 0, 0);
+      octx.restore();
+
+      frames.push(octx.getImageData(0, 0, EXPORT_WIDTH, EXPORT_HEIGHT));
+      delays.push(step * 1000);
+    }
+  }
+
+  state.displayPose = savedPose;
+  draw();
+  return { frames, delays };
+}
+
+function exportGif() {
+  if (state.timeline.isEmpty()) {
+    $("export-readout").textContent = "nothing to export — record a take first";
+    log("GIF export refused: empty timeline", "err");
+    return null;
+  }
+
+  const started = performance.now();
+  const { frames, delays } = renderReelFrames();
+  const bytes = encodeGif(frames, delays, true);
+  const info = inspectGif(bytes);
+
+  const blob = new Blob([bytes], { type: "image/gif" });
+  const url = URL.createObjectURL(blob);
+  state.lastGif = { bytes, info, url };
+
+  const preview = $("export-preview");
+  preview.innerHTML = "";
+  const img = document.createElement("img");
+  img.id = "gif-preview";
+  img.src = url;
+  img.style.maxWidth = "100%";
+  img.style.border = "1px solid var(--line)";
+  img.style.borderRadius = "6px";
+  preview.appendChild(img);
+
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = "reel-life.gif";
+  link.textContent = "download reel-life.gif";
+  link.style.display = "inline-block";
+  link.style.marginTop = "6px";
+  link.style.color = "var(--accent)";
+  preview.appendChild(link);
+
+  $("export-readout").textContent =
+    `GIF ${info.width}×${info.height} · ${info.frames} frames · ${info.paletteEntries} colours\n` +
+    `loops: ${info.loops} · ${(info.bytes / 1024).toFixed(1)} KB · ` +
+    `encoded in ${Math.round(performance.now() - started)}ms\n` +
+    `delays: ${info.delaysMs.slice(0, 6).join(", ")}${info.delaysMs.length > 6 ? " …" : ""} ms`;
+
+  log(`exported GIF: ${info.frames} frames, ${(info.bytes / 1024).toFixed(1)}KB`);
+  return info;
+}
+
+/** Every exposure laid out as one grid image — the traditional contact sheet. */
+function exportContactSheet() {
+  if (state.timeline.isEmpty()) {
+    $("export-readout").textContent = "nothing to export — record a take first";
+    return null;
+  }
+  const { frames } = renderReelFrames();
+  const columns = Math.ceil(Math.sqrt(frames.length));
+  const rows = Math.ceil(frames.length / columns);
+  const cellW = Math.round(EXPORT_WIDTH / 2);
+  const cellH = Math.round(EXPORT_HEIGHT / 2);
+
+  const sheet = document.createElement("canvas");
+  sheet.width = columns * cellW;
+  sheet.height = rows * cellH;
+  const sctx = sheet.getContext("2d");
+  sctx.fillStyle = "#0a0b10";
+  sctx.fillRect(0, 0, sheet.width, sheet.height);
+
+  const tmp = document.createElement("canvas");
+  tmp.width = EXPORT_WIDTH;
+  tmp.height = EXPORT_HEIGHT;
+  const tctx = tmp.getContext("2d");
+
+  frames.forEach((frame, i) => {
+    tctx.putImageData(frame, 0, 0);
+    const x = (i % columns) * cellW;
+    const y = Math.floor(i / columns) * cellH;
+    sctx.drawImage(tmp, x, y, cellW, cellH);
+    sctx.fillStyle = "#ffb454";
+    sctx.font = "10px monospace";
+    sctx.fillText(String(i + 1), x + 4, y + 12);
+  });
+
+  const url = sheet.toDataURL("image/png");
+  state.lastSheet = { url, columns, rows, frames: frames.length,
+                      width: sheet.width, height: sheet.height };
+
+  const preview = $("export-preview");
+  preview.innerHTML = "";
+  const img = document.createElement("img");
+  img.id = "sheet-preview";
+  img.src = url;
+  img.style.maxWidth = "100%";
+  preview.appendChild(img);
+
+  $("export-readout").textContent =
+    `contact sheet ${sheet.width}×${sheet.height} · ${frames.length} exposures · ${columns}×${rows} grid`;
+  log(`exported contact sheet: ${frames.length} exposures`);
+  return state.lastSheet;
+}
 
 // ---------------------------------------------------------------------------
 // Audio — real assets, real AudioDirector decisions

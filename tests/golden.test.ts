@@ -307,3 +307,36 @@ test("degenerate quaternions in stored data still yield unit output", () => {
   }
   assert.deepEqual(qNormalize(zero), Q_IDENTITY);
 });
+
+// ===========================================================================
+// The demo GIF — the project's one watchable artefact
+// ===========================================================================
+
+test("the demo GIF renders and is a valid looping animation", () => {
+  execFileSync("node", [join(ROOT, "tools", "render-demo-gif.mjs")], { stdio: "pipe" });
+
+  const bytes = readFileSync(join(ROOT, "docs", "media", "reel-life-demo.gif"));
+  assert.equal(bytes.toString("ascii", 0, 6), "GIF89a");
+  assert.equal(bytes[bytes.length - 1], 0x3b, "missing GIF trailer");
+
+  const width = bytes[6] | (bytes[7] << 8);
+  const height = bytes[8] | (bytes[9] << 8);
+  assert.equal(width, 480);
+  assert.equal(height, 320);
+
+  // Count image descriptors: an animation needs more than one.
+  let frames = 0;
+  for (let i = 0; i < bytes.length - 1; i++) {
+    if (bytes[i] === 0x2c) frames++;
+  }
+  assert.ok(frames > 10, `expected an animation, found ${frames} image blocks`);
+  assert.ok(bytes.length > 10000, "a real animation should not be a few hundred bytes");
+});
+
+test("the demo GIF is reproducible", () => {
+  const file = join(ROOT, "docs", "media", "reel-life-demo.gif");
+  const before = createHash("sha256").update(readFileSync(file)).digest("hex");
+  execFileSync("node", [join(ROOT, "tools", "render-demo-gif.mjs")], { stdio: "pipe" });
+  const after = createHash("sha256").update(readFileSync(file)).digest("hex");
+  assert.equal(after, before, "the renderer is not deterministic");
+});

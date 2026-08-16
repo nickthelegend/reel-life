@@ -10,6 +10,13 @@ snap every pose to the beat of the score, and play the whole thing back as a ree
 Built with [CLAD](https://developers.specs.com/docs/clad/overview-section/agents-and-skills)
 for the SPECS hackathon.
 
+![A dragon armature rearing up, beating its wings and bowing, shot on twos with onion-skin trails](docs/media/reel-life-demo.gif)
+
+*A real performance: three takes, quantized to 150 BPM, with follow-through
+baked in and onion-skin trails, shot on twos. Rendered straight from the
+shipping `Logic/` modules by `node tools/render-demo-gif.mjs` — no Lens Studio,
+no browser, no screen recording.*
+
 ---
 
 ## What it does

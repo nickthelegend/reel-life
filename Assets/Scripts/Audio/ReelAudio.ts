@@ -1,7 +1,17 @@
 import { Log } from "../Core/Log";
+import {
+  SfxGate,
+  TrackInfo,
+  activeBpm,
+  availableMoods,
+  crossfadeProgress,
+  stepVolume,
+  targetVolume,
+  trackForMood,
+  volumeForStrength,
+} from "../Logic/AudioDirector";
 import { MoodTag } from "../Logic/MusicPrompt";
 import { clamp01 } from "../Logic/Vec";
-
 /**
  * Score and foley playback.
  *
@@ -13,26 +23,11 @@ import { clamp01 } from "../Logic/Vec";
  *
  * Two music channels exist so switching mood crossfades instead of cutting.
  */
-
-export interface MusicTrack {
-  mood: MoodTag;
-  track: AudioTrackAsset;
-  /** Tempo the track was generated at. Drives the beat grid. */
-  bpm: number;
-}
-
+/** A music track plus the tempo it was rendered at. */
+export type MusicTrack = TrackInfo<AudioTrackAsset>;
 export interface SfxBank {
   [sfxId: string]: AudioComponent;
 }
-
-const CROSSFADE_SECONDS = 0.5;
-
-/** Foley cooldown, so a fast performance does not machine-gun one sound. */
-const SFX_COOLDOWN_SECONDS = 0.12;
-
-/** Music drops to this while the mic is live, so ASR is not fighting the score. */
-const DUCKED_VOLUME = 0.15;
-
 export class ReelAudio {
   private log = new Log("Audio");
   private channels: AudioComponent[];
@@ -42,9 +37,8 @@ export class ReelAudio {
   private fadeFrom = 0;
   private fadeStart = -1;
   private ducked = false;
-  private lastSfxAt: Record<string, number> = {};
+  private sfxGate = new SfxGate();
   private currentTrack: MusicTrack | null = null;
-
   constructor(
     musicChannelA: AudioComponent,
     musicChannelB: AudioComponent,
@@ -56,36 +50,20 @@ export class ReelAudio {
       channel.volume = 0;
     }
   }
-
   /** All moods that actually have a track imported. */
   availableMoods(): MoodTag[] {
-    const moods: MoodTag[] = [];
-    for (const entry of this.tracks) {
-      if (moods.indexOf(entry.mood) === -1) {
-        moods.push(entry.mood);
-      }
-    }
-    return moods;
+    return availableMoods(this.tracks);
   }
-
   trackForMood(mood: MoodTag): MusicTrack | null {
-    for (const entry of this.tracks) {
-      if (entry.mood === mood) {
-        return entry;
-      }
-    }
-    return null;
+    return trackForMood(this.tracks, mood);
   }
-
   activeTrack(): MusicTrack | null {
     return this.currentTrack;
   }
-
   /** Tempo the reel should be quantized to. */
   activeBpm(fallback: number): number {
-    return this.currentTrack ? this.currentTrack.bpm : fallback;
+    return activeBpm(this.currentTrack, fallback);
   }
-
   /**
    * Start (or crossfade to) the track for a mood. Returns the track so the
    * caller can rebuild the beat grid from its BPM.
@@ -96,26 +74,22 @@ export class ReelAudio {
       this.log.warn(`no music imported for mood "${mood}" — run /build-music for it`);
       return null;
     }
-    if (this.currentTrack && this.currentTrack.track === entry.track) {
+    if (this.currentTrack && this.currentTrack.handle === entry.handle) {
       return this.currentTrack;
     }
-
     const next = (this.activeChannel + 1) % this.channels.length;
     const incoming = this.channels[next];
-    incoming.audioTrack = entry.track;
+    incoming.audioTrack = entry.handle;
     incoming.volume = 0;
     incoming.play(-1);
-
     this.activeChannel = next;
     this.currentTrack = entry;
     this.fadeFrom = 0;
     this.fadeStart = now;
-    this.targetVolume = this.ducked ? DUCKED_VOLUME : this.musicVolume;
-
+    this.targetVolume = targetVolume(this.musicVolume, this.ducked);
     this.log.info(`music: ${mood} at ${entry.bpm} BPM`);
     return entry;
   }
-
   stopMusic(): void {
     for (const channel of this.channels) {
       if (channel.isPlaying()) {
@@ -126,28 +100,21 @@ export class ReelAudio {
     this.currentTrack = null;
     this.fadeStart = -1;
   }
-
   setMusicVolume(volume: number): void {
     this.musicVolume = clamp01(volume);
-    if (!this.ducked) {
-      this.targetVolume = this.musicVolume;
-    }
+    this.targetVolume = targetVolume(this.musicVolume, this.ducked);
   }
-
   /** Called while the mic is open so speech recognition stays clean. */
   setDucked(ducked: boolean): void {
     this.ducked = ducked;
-    this.targetVolume = ducked ? DUCKED_VOLUME : this.musicVolume;
+    this.targetVolume = targetVolume(this.musicVolume, this.ducked);
   }
-
   /** Call every frame. Drives the crossfade and volume ramps. */
   update(now: number): void {
     const active = this.channels[this.activeChannel];
-
     if (this.fadeStart >= 0) {
-      const t = clamp01((now - this.fadeStart) / CROSSFADE_SECONDS);
+      const t = crossfadeProgress(now, this.fadeStart);
       active.volume = this.fadeFrom + (this.targetVolume - this.fadeFrom) * t;
-
       for (let i = 0; i < this.channels.length; i++) {
         if (i === this.activeChannel) {
           continue;
@@ -163,16 +130,10 @@ export class ReelAudio {
       }
       return;
     }
-
-    if (Math.abs(active.volume - this.targetVolume) > 0.001) {
-      // Small per-frame step: fast enough to feel immediate, slow enough not
-      // to click.
-      const step = 0.08;
-      const delta = this.targetVolume - active.volume;
-      active.volume += Math.abs(delta) < step ? delta : Math.sign(delta) * step;
+    if (active.volume !== this.targetVolume) {
+      active.volume = stepVolume(active.volume, this.targetVolume);
     }
   }
-
   /**
    * Fire a foley hit. `strength` (0..1) comes from how far the puppet moved on
    * that transition, so a big leap is louder than a small step.
@@ -182,15 +143,12 @@ export class ReelAudio {
     if (!component || !component.audioTrack) {
       return;
     }
-    const last = this.lastSfxAt[sfxId];
-    if (last !== undefined && now - last < SFX_COOLDOWN_SECONDS) {
+    if (!this.sfxGate.request(sfxId, now)) {
       return;
     }
-    this.lastSfxAt[sfxId] = now;
-    component.volume = 0.35 + 0.65 * clamp01(strength);
+    component.volume = volumeForStrength(strength);
     component.play(1);
   }
-
   stopAll(): void {
     this.stopMusic();
     for (const id in this.sfx) {

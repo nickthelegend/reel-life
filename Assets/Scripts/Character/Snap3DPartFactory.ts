@@ -1,6 +1,7 @@
 import { Snap3D, Snap3DTypes } from "Remote Service Gateway.lspkg/HostedSnap/Snap3D";
 
 import { Log, describeError } from "../Core/Log";
+import { PartStage, progressForStage } from "../Logic/PartScaling";
 import { PartSpec, RigPlan } from "../Logic/RigPlan";
 
 /**
@@ -13,7 +14,7 @@ import { PartSpec, RigPlan } from "../Logic/RigPlan";
  * arm is worse than a visible error.
  */
 
-export type PartStage = "queued" | "preview" | "base_mesh" | "done" | "failed";
+export { PartStage };
 
 export interface PartProgress {
   jointId: string;
@@ -27,14 +28,6 @@ export interface GeneratedParts {
   assets: Record<string, GltfAsset>;
   elapsedSeconds: number;
 }
-
-const STAGE_PROGRESS: Record<PartStage, number> = {
-  queued: 0.05,
-  preview: 0.35,
-  base_mesh: 0.7,
-  done: 1,
-  failed: 0,
-};
 
 export class Snap3DPartFactory {
   private log = new Log("Snap3D");
@@ -58,7 +51,7 @@ export class Snap3DPartFactory {
       onProgress({
         jointId: part.jointId,
         stage: "queued",
-        progress: STAGE_PROGRESS.queued,
+        progress: progressForStage("queued"),
         message: "queued",
       });
     }
@@ -88,7 +81,7 @@ export class Snap3DPartFactory {
       onProgress({
         jointId: part.jointId,
         stage: "queued",
-        progress: STAGE_PROGRESS.queued,
+        progress: progressForStage("queued"),
         message: "retrying",
       });
       try {
@@ -120,7 +113,7 @@ export class Snap3DPartFactory {
         onProgress({
           jointId: part.jointId,
           stage,
-          progress: STAGE_PROGRESS[stage],
+          progress: progressForStage(stage),
           message,
         });
       };

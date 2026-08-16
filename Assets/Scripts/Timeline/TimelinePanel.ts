@@ -3,8 +3,16 @@ import { InteractableManipulation } from "SpectaclesInteractionKit.lspkg/Compone
 
 import { Log } from "../Core/Log";
 import { Clip, clipDuration, setTrimIn, setTrimOut, trimmedKeyframes } from "../Logic/Clip";
+import {
+  PanelMetrics,
+  chipLabel,
+  indexForX,
+  keyframeIndexForX,
+  playheadX,
+  slotX,
+  xForKeyframeIndex,
+} from "../Logic/PanelLayout";
 import { ReelTimeline } from "../Logic/ReelTimeline";
-import { clamp } from "../Logic/Vec";
 
 /**
  * The in-AR reel editor: one chip per take, laid out left to right.
@@ -112,8 +120,7 @@ export class TimelinePanel {
       return;
     }
     this.playhead.enabled = true;
-    const span = this.trackWidth();
-    const x = -span / 2 + (clamp(globalT, 0, total) / total) * span;
+    const x = playheadX(this.metrics(), globalT, total, this.chips.length);
     this.playhead.getTransform().setLocalPosition(new vec3(x, 0, 0.2));
   }
 
@@ -268,17 +275,17 @@ export class TimelinePanel {
   // Interaction
   // -------------------------------------------------------------------------
 
-  private slotWidth(): number {
-    return this.config.chipWidthCm + this.config.gapCm;
-  }
-
-  private trackWidth(): number {
-    return Math.max(1, this.chips.length) * this.slotWidth();
+  /** Layout arithmetic lives in Logic/PanelLayout so it can be tested. */
+  private metrics(): PanelMetrics {
+    return {
+      chipWidthCm: this.config.chipWidthCm,
+      chipHeightCm: this.config.chipHeightCm,
+      gapCm: this.config.gapCm,
+    };
   }
 
   private slotX(index: number): number {
-    const count = Math.max(1, this.chips.length);
-    return (index - (count - 1) / 2) * this.slotWidth();
+    return slotX(this.metrics(), index, this.chips.length);
   }
 
   private layout(): void {
@@ -331,9 +338,7 @@ export class TimelinePanel {
   }
 
   private indexForX(x: number): number {
-    const count = Math.max(1, this.chips.length);
-    const raw = x / this.slotWidth() + (count - 1) / 2;
-    return clamp(Math.round(raw), 0, count - 1);
+    return indexForX(this.metrics(), x, this.chips.length);
   }
 
   /** Re-sort the chip views to match the timeline's current clip order. */
@@ -390,17 +395,12 @@ export class TimelinePanel {
   }
 
   private keyframeIndexForX(x: number, keyframeCount: number): number {
-    const half = this.config.chipWidthCm / 2;
-    const u = clamp((x + half) / this.config.chipWidthCm, 0, 1);
-    return Math.round(u * (keyframeCount - 1));
+    return keyframeIndexForX(this.metrics(), x, keyframeCount);
   }
 
   private positionTrimHandles(chip: ChipView, clip: Clip): void {
-    const last = Math.max(1, clip.keyframes.length - 1);
-    const half = this.config.chipWidthCm / 2;
-
-    const inX = -half + (clip.trimIn / last) * this.config.chipWidthCm;
-    const outX = -half + (clip.trimOut / last) * this.config.chipWidthCm;
+    const inX = xForKeyframeIndex(this.metrics(), clip.trimIn, clip.keyframes.length);
+    const outX = xForKeyframeIndex(this.metrics(), clip.trimOut, clip.keyframes.length);
 
     chip.trimInHandle.getTransform().setLocalPosition(new vec3(inX, 0, 0.15));
     chip.trimOutHandle.getTransform().setLocalPosition(new vec3(outX, 0, 0.15));
@@ -425,10 +425,12 @@ export class TimelinePanel {
   }
 }
 
-/** "Take 2 · 1.6s · 5 poses" */
 export function describeClip(clip: Clip): string {
-  const frames = trimmedKeyframes(clip).length;
-  const seconds = clipDuration(clip).toFixed(1);
-  const trimmed = frames < clip.keyframes.length ? " ✂" : "";
-  return `${clip.name} · ${seconds}s · ${frames} poses${trimmed}`;
+  return chipLabel(
+    clip.name,
+    clipDuration(clip),
+    trimmedKeyframes(clip).length,
+    clip.keyframes.length,
+    clip.caption
+  );
 }

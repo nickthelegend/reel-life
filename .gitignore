@@ -1,5 +1,8 @@
 node_modules/
-dist/
+/dist/
+
+# harness/dist IS tracked: it is what makes the harness runnable straight
+# after a clone, with no build step.
 
 # Lens Studio project artifacts, if you save the project into this folder
 Cache/

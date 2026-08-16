@@ -1,5 +1,6 @@
 import { toEngineVec } from "../Core/Convert";
 import { Log } from "../Core/Log";
+import { scaleForPart } from "../Logic/PartScaling";
 import { JointSpec, RigPlan, jointsInBuildOrder } from "../Logic/RigPlan";
 
 /**
@@ -56,7 +57,7 @@ export class CharacterAssembler {
       instance.name = `mesh_${part.jointId}`;
       meshes[part.jointId] = instance;
 
-      this.normalizePartScale(instance, part.heightFraction * plan.targetHeightCm, part.jointId);
+      this.normalizePartScale(instance, part.heightFraction, plan.targetHeightCm, part.jointId);
     }
 
     this.log.info(
@@ -93,18 +94,16 @@ export class CharacterAssembler {
    */
   private normalizePartScale(
     instance: SceneObject,
+    heightFraction: number,
     targetHeightCm: number,
     jointId: string
   ): void {
-    const height = measureHeight(instance);
-    if (height <= 0) {
-      this.log.warn(
-        `part "${jointId}" has no measurable mesh bounds; leaving it at authored scale`
-      );
+    const result = scaleForPart(measureHeight(instance), heightFraction, targetHeightCm);
+    if (!result.measured) {
+      this.log.warn(`part "${jointId}": ${result.reason}; leaving it at authored scale`);
       return;
     }
-    const scale = targetHeightCm / height;
-    instance.getTransform().setLocalScale(new vec3(scale, scale, scale));
+    instance.getTransform().setLocalScale(new vec3(result.scale, result.scale, result.scale));
   }
 }
 

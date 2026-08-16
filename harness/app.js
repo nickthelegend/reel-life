@@ -11,6 +11,14 @@ import "./platform.js";
 import { ReelStore } from "./dist/Character/ReelStore.js";
 import { accentAtKeyframe, buildAccentIndex } from "./dist/Logic/AccentTrack.js";
 import {
+  SfxGate,
+  activeBpm,
+  availableMoods,
+  trackForMood,
+  validateTracks,
+  volumeForStrength,
+} from "./dist/Logic/AudioDirector.js";
+import {
   createBeatGrid,
   quantizeClip,
   stepSeconds,
@@ -99,6 +107,12 @@ const state = {
   accents: {},
   lastAccentKey: "",
   accentLog: [],
+  // Audio: real WAV assets from Assets/Audio, selected by the real AudioDirector.
+  tracks: [],
+  activeTrack: null,
+  sfxGate: new SfxGate(),
+  audioEls: {},
+  sfxLog: [],
 };
 
 window.RL = state;
@@ -463,6 +477,7 @@ function seekTo(globalT) {
     const mark = accentAtKeyframe(state.accents[cursor.clip.id], index);
     if (mark) {
       state.accentLog.push(`${mark.sfxId}@${cursor.clip.name}#${index}`);
+      triggerSfx(mark.sfxId, mark.strength, performance.now() / 1000);
       $("accent-readout").textContent = `accents fired: ${state.accentLog.join(", ")}`;
     }
   }
@@ -1075,6 +1090,21 @@ $("btn-retarget").onclick = () => {
   log(`retargeted ${moved.length} take(s) onto ${target.subject}`);
 };
 
+$("btn-play-mood").onclick = () => playMood($("mood-select").value);
+$("btn-stop-music").onclick = () => {
+  for (const key in state.audioEls) if (key.indexOf("music:") === 0) state.audioEls[key].pause();
+  state.activeTrack = null;
+  log("music stopped");
+  refreshAudio();
+};
+for (const id of ["step", "whoosh", "bonk"]) {
+  $(`btn-sfx-${id}`).onclick = () => {
+    const fired = triggerSfx(id, 0.8, performance.now() / 1000);
+    log(`sfx ${id}: ${fired ? "played" : "refused by cooldown"}`);
+    refreshAudio();
+  };
+}
+
 $("btn-save").onclick = () => {
   saveReel();
   log(`saved reel ${state.doc ? state.doc.id : "(none)"}`);
@@ -1103,11 +1133,111 @@ $("btn-clear-storage").onclick = () => {
 };
 
 // ---------------------------------------------------------------------------
+// Audio — real assets, real AudioDirector decisions
+// ---------------------------------------------------------------------------
+
+/**
+ * Loads Assets/Audio/manifest.json and validates it through the SAME
+ * validateTracks() the Lens uses, so a track missing a BPM is rejected here
+ * exactly as it would be on device.
+ */
+async function loadAudio() {
+  const response = await fetch("../Assets/Audio/manifest.json");
+  if (!response.ok) {
+    $("audio-readout").textContent = `no audio assets (${response.status}) — run: node tools/build-audio.mjs`;
+    return;
+  }
+  const manifest = await response.json();
+
+  const candidates = manifest
+    .filter((e) => e.kind === "music")
+    .map((e) => ({ mood: e.mood, bpm: e.bpm, handle: `../Assets/Audio/${e.file}` }));
+  const { tracks, rejected } = validateTracks(candidates);
+  state.tracks = tracks;
+
+  for (const entry of manifest) {
+    const el = new Audio(`../Assets/Audio/${entry.file}`);
+    el.preload = "auto";
+    if (entry.kind === "music") {
+      el.loop = true;
+      state.audioEls[`music:${entry.mood}`] = el;
+    } else {
+      state.audioEls[`sfx:${entry.id}`] = el;
+    }
+  }
+
+  state.manifest = manifest;
+  state.audioRejected = rejected;
+  refreshAudio();
+  log(`audio loaded: ${tracks.length} tracks (${availableMoods(tracks).join(", ")}), ${manifest.length - tracks.length} sfx`);
+}
+
+/** Switch mood: play the real track AND re-grid the reel to its tempo. */
+function playMood(mood) {
+  const track = trackForMood(state.tracks, mood);
+  if (!track) {
+    log(`no track imported for "${mood}"`, "err");
+    refreshAudio();
+    return null;
+  }
+  for (const key in state.audioEls) {
+    if (key.indexOf("music:") === 0) {
+      state.audioEls[key].pause();
+    }
+  }
+  const el = state.audioEls[`music:${mood}`];
+  state.activeTrack = track;
+  el.volume = 0.8;
+  el.currentTime = 0;
+  const attempt = el.play();
+  if (attempt && attempt.catch) {
+    attempt.catch((e) => { state.audioBlocked = String(e && e.name ? e.name : e); refreshAudio(); });
+  }
+
+  // Beat-lock: the grid follows the track that is actually playing.
+  state.grid = createBeatGrid(activeBpm(track, state.grid.bpm), 2);
+  $("bpm").value = String(state.grid.bpm);
+  let regridded = 0;
+  for (const clip of state.timeline.clips) {
+    if (clip.source === "stopmotion") { quantizeClip(clip, state.grid); regridded++; }
+  }
+  commit(`mood ${mood} @ ${track.bpm} BPM`);
+  log(`music: ${mood} @ ${track.bpm} BPM — re-gridded ${regridded} take(s)`);
+  refreshAudio();
+  return track;
+}
+
+function triggerSfx(sfxId, strength, now) {
+  const el = state.audioEls[`sfx:${sfxId}`];
+  if (!el) return false;
+  if (!state.sfxGate.request(sfxId, now)) return false;
+  el.volume = volumeForStrength(strength);
+  el.currentTime = 0;
+  const attempt = el.play();
+  if (attempt && attempt.catch) attempt.catch(() => {});
+  state.sfxLog.push(sfxId);
+  return true;
+}
+
+function refreshAudio() {
+  const el = state.activeTrack ? state.audioEls[`music:${state.activeTrack.mood}`] : null;
+  $("audio-readout").textContent =
+    `tracks loaded : ${state.tracks.map((t) => `${t.mood}@${t.bpm}`).join(", ") || "(none)"}\n` +
+    `rejected      : ${(state.audioRejected || []).join("; ") || "(none)"}\n` +
+    `active        : ${state.activeTrack ? `${state.activeTrack.mood} @ ${state.activeTrack.bpm} BPM` : "(none)"}\n` +
+    `element       : ${el ? `dur=${(el.duration || 0).toFixed(3)}s ready=${el.readyState} paused=${el.paused}` : "-"}\n` +
+    `grid bpm      : ${state.grid.bpm}\n` +
+    `autoplay      : ${state.audioBlocked ? "blocked (" + state.audioBlocked + ")" : "permitted"}\n` +
+    `sfx fired     : ${state.sfxLog.join(", ") || "(none)"}`;
+}
+
+// ---------------------------------------------------------------------------
 // Boot
 // ---------------------------------------------------------------------------
 
 $("build-info").textContent =
   "real Logic modules loaded from ./dist — persistence via localStorage";
 refreshAll();
+loadAudio().catch((e) => log(`audio load failed: ${e.message}`, "err"));
 pump.port2.postMessage(0);
 log(`harness ready — frame clock: MessageChannel (document.hidden=${document.hidden})`);

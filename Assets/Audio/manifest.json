@@ -1,0 +1,56 @@
+[
+  {
+    "kind": "music",
+    "mood": "whimsical",
+    "file": "music_whimsical.wav",
+    "bpm": 150,
+    "seconds": 6.4,
+    "bars": 4,
+    "beatsExact": true
+  },
+  {
+    "kind": "music",
+    "mood": "epic",
+    "file": "music_epic.wav",
+    "bpm": 120,
+    "seconds": 8,
+    "bars": 4,
+    "beatsExact": true
+  },
+  {
+    "kind": "music",
+    "mood": "spooky",
+    "file": "music_spooky.wav",
+    "bpm": 90,
+    "seconds": 10.6667,
+    "bars": 4,
+    "beatsExact": true
+  },
+  {
+    "kind": "music",
+    "mood": "bouncy",
+    "file": "music_bouncy.wav",
+    "bpm": 140,
+    "seconds": 6.8571,
+    "bars": 4,
+    "beatsExact": true
+  },
+  {
+    "kind": "sfx",
+    "id": "step",
+    "file": "sfx_step.wav",
+    "seconds": 0.3
+  },
+  {
+    "kind": "sfx",
+    "id": "whoosh",
+    "file": "sfx_whoosh.wav",
+    "seconds": 0.4
+  },
+  {
+    "kind": "sfx",
+    "id": "bonk",
+    "file": "sfx_bonk.wav",
+    "seconds": 0.4
+  }
+]

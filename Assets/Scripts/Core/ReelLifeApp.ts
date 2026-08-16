@@ -1045,7 +1045,7 @@ export class ReelLifeApp extends BaseScriptComponent {
         );
         continue;
       }
-      tracks.push({ mood, track: this.musicTracks[i], bpm });
+      tracks.push({ mood, handle: this.musicTracks[i], bpm });
     }
     return tracks;
   }

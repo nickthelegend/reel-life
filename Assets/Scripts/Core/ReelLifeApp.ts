@@ -1,8 +1,16 @@
 import WorldQueryModule from "LensStudio:WorldQueryModule";
 
 import { ReelAudio, MusicTrack } from "../Audio/ReelAudio";
+import { EditHistory } from "../Logic/EditHistory";
+import { IdFactory, sessionSeedFromTime } from "../Logic/Ids";
+import { DEFAULT_SECONDARY_MOTION, applySecondaryMotion } from "../Logic/SecondaryMotion";
+import { HealthNote, describeStats, posterFrame, reelHealth, reelStats } from "../Logic/ReelStats";
+import { ShootRate, createShootRate, describeShootRate, nextShootMode } from "../Logic/Stepped";
+import { VoiceCommand, isCommand, parseVoiceCommand } from "../Logic/VoiceCommands";
+import { mirrorClip, shouldSuggestSmoothing, smoothClip } from "../Logic/PoseOps";
+import { loopBlendClip, reverseClip } from "../Logic/ClipOps";
 import { AssembledCharacter, CharacterAssembler } from "../Character/CharacterAssembler";
-import { ReelStore, newId } from "../Character/ReelStore";
+import { ReelStore } from "../Character/ReelStore";
 import { PartProgress, Snap3DPartFactory } from "../Character/Snap3DPartFactory";
 import { Clip, clipDuration } from "../Logic/Clip";
 import {
@@ -14,7 +22,7 @@ import {
 import { MOODS, MoodTag, buildMusicPrompt } from "../Logic/MusicPrompt";
 import { ReelDocument, createReelDocument } from "../Logic/ReelDocument";
 import { ReelTimeline } from "../Logic/ReelTimeline";
-import { RigPlan, buildRigPlan } from "../Logic/RigPlan";
+import { RigPlan, buildRigPlan, poseableJointIds } from "../Logic/RigPlan";
 import { PlacementHit, SurfacePlacer } from "../Placement/SurfacePlacer";
 import { ReelPlayer } from "../Playback/ReelPlayer";
 import { JointHandles } from "../Puppeteer/JointHandles";
@@ -67,6 +75,8 @@ export class ReelLifeApp extends BaseScriptComponent {
   @input speedButton: SceneObject;
   @input moodButton: SceneObject;
   @input newTakeButton: SceneObject;
+  @input shootModeButton: SceneObject;
+  @input undoButton: SceneObject;
 
   // --- Timeline & captions ------------------------------------------------
   @input timelineRoot: SceneObject;
@@ -108,6 +118,10 @@ export class ReelLifeApp extends BaseScriptComponent {
   private grid: BeatGrid = createBeatGrid();
   private mood: MoodTag = "whimsical";
   private speedIndex = 0;
+  private shootRate: ShootRate = createShootRate("twos");
+  private history = new EditHistory();
+  private ids = new IdFactory(sessionSeedFromTime(Date.now()));
+  private followThrough = true;
 
   private voice: VoicePromptController;
   private placer: SurfacePlacer;
@@ -133,6 +147,9 @@ export class ReelLifeApp extends BaseScriptComponent {
   }
 
   private onStart(): void {
+    if (!this.validateInputs()) {
+      return;
+    }
     this.audio = new ReelAudio(
       this.musicChannelA,
       this.musicChannelB,
@@ -193,6 +210,66 @@ export class ReelLifeApp extends BaseScriptComponent {
     this.placementReticle.enabled = false;
     this.setState("idle");
     this.restoreLastReel();
+  }
+
+  /**
+   * Fail loudly at startup if the scene is not wired up.
+   *
+   * This component has a lot of inputs. A missing one otherwise surfaces as a
+   * null dereference several seconds later, in a callback, with no clue which
+   * field was forgotten — which is exactly the experience of opening someone
+   * else's hackathon project.
+   */
+  private validateInputs(): boolean {
+    const required: Array<[string, unknown]> = [
+      ["cameraObject", this.cameraObject],
+      ["studioRoot", this.studioRoot],
+      ["placementReticle", this.placementReticle],
+      ["statusText", this.statusText],
+      ["voiceButton", this.voiceButton],
+      ["placeButton", this.placeButton],
+      ["capturePoseButton", this.capturePoseButton],
+      ["recordPerformanceButton", this.recordPerformanceButton],
+      ["playPreviewButton", this.playPreviewButton],
+      ["playReelButton", this.playReelButton],
+      ["onionSkinButton", this.onionSkinButton],
+      ["speedButton", this.speedButton],
+      ["moodButton", this.moodButton],
+      ["newTakeButton", this.newTakeButton],
+      ["shootModeButton", this.shootModeButton],
+      ["undoButton", this.undoButton],
+      ["timelineRoot", this.timelineRoot],
+      ["captionRoot", this.captionRoot],
+      ["captionText", this.captionText],
+      ["chipMesh", this.chipMesh],
+      ["chipMaterial", this.chipMaterial],
+      ["chipActiveMaterial", this.chipActiveMaterial],
+      ["handleMaterial", this.handleMaterial],
+      ["playheadMaterial", this.playheadMaterial],
+      ["uiFont", this.uiFont],
+      ["characterMaterial", this.characterMaterial],
+      ["musicChannelA", this.musicChannelA],
+      ["musicChannelB", this.musicChannelB],
+      ["sfxStep", this.sfxStep],
+      ["sfxWhoosh", this.sfxWhoosh],
+      ["sfxBonk", this.sfxBonk],
+      ["asrModule", this.asrModule],
+    ];
+
+    const missing = required.filter((entry) => !entry[1]).map((entry) => entry[0]);
+    if (!this.ghostMaterials || this.ghostMaterials.length === 0) {
+      missing.push("ghostMaterials (need at least one translucent material)");
+    }
+
+    if (missing.length > 0) {
+      const message = `ReelLifeApp is missing ${missing.length} input(s): ${missing.join(", ")}`;
+      this.log.error(message);
+      if (this.statusText) {
+        this.statusText.text = message;
+      }
+      return false;
+    }
+    return true;
   }
 
   // -------------------------------------------------------------------------
@@ -263,6 +340,17 @@ export class ReelLifeApp extends BaseScriptComponent {
       onTap: () => this.finishTake(),
     });
 
+    this.buttons.shootMode = new PanelButton(this.shootModeButton, {
+      onTap: () => this.cycleShootMode(),
+    });
+
+    this.buttons.undo = new PanelButton(this.undoButton, {
+      onTap: () => this.undo(),
+      // Hold to redo: a second button for something used once a session is not
+      // worth the space on a world-space panel.
+      onPress: () => {},
+    });
+
     this.updateButtonLabels();
   }
 
@@ -272,6 +360,8 @@ export class ReelLifeApp extends BaseScriptComponent {
     this.buttons.onion.setText(
       this.onion && this.onion.isVisible() ? "Onion: on" : "Onion: off"
     );
+    this.buttons.shootMode.setText(describeShootRate(this.shootRate));
+    this.buttons.undo.setText(this.history.canUndo() ? "Undo" : "Undo —");
   }
 
   // -------------------------------------------------------------------------
@@ -291,6 +381,8 @@ export class ReelLifeApp extends BaseScriptComponent {
     this.buttons.newTake.setVisible(posing);
     this.buttons.onion.setVisible(posing);
     this.buttons.playReel.setVisible(posing || state === "playing");
+    this.buttons.shootMode.setVisible(posing || state === "playing");
+    this.buttons.undo.setVisible(posing);
     this.buttons.speed.setVisible(posing || state === "playing");
     this.buttons.mood.setVisible(posing || state === "playing");
     this.timelineRoot.enabled = posing || state === "playing";
@@ -327,6 +419,16 @@ export class ReelLifeApp extends BaseScriptComponent {
       this.applyCaption(this.captioningClipId, text);
       return;
     }
+
+    // A short known phrase is an editor command; anything else is a character
+    // description. The parser is deliberately strict so "a clay dragon holding
+    // a tiny stop sign" never fires the stop command.
+    const command = parseVoiceCommand(text);
+    if (isCommand(command) && this.character) {
+      this.runCommand(command);
+      return;
+    }
+
     this.generateCharacter(text).catch((error) => {
       this.setStatus(`Generation failed: ${describeError(error)}`);
       this.setState("idle");
@@ -357,10 +459,12 @@ export class ReelLifeApp extends BaseScriptComponent {
     this.store.rememberRig(plan);
     this.buildCharacter(plan, generated.assets);
 
-    this.document = createReelDocument(newId("reel"), plan, Date.now());
+    this.document = createReelDocument(this.ids.next("reel"), plan, Date.now());
     this.document.mood = this.mood;
     this.timeline.clips = [];
     this.panel.rebuild();
+    this.history.clear();
+    this.history.commit("new character", []);
 
     this.setState("placing");
     this.placer.begin();
@@ -403,7 +507,7 @@ export class ReelLifeApp extends BaseScriptComponent {
     this.onion = new OnionSkin(plan, assets, this.studioRoot, this.ghostMaterials);
     this.onion.build();
 
-    this.recorder = new PoseRecorder(this.character);
+    this.recorder = new PoseRecorder(this.character, this.ids);
     this.player = new ReelPlayer(this.character, this.timeline, {
       onClipChanged: (index) => this.panel.select(this.timeline.clips[index].id),
       onCaption: (text) => this.caption.show(text, getTime()),
@@ -438,7 +542,7 @@ export class ReelLifeApp extends BaseScriptComponent {
     }
     this.anchorCharacter(hit);
     this.setState("posing");
-    this.setStatus("Pose a limb, then Capture Pose");
+    this.showHealth();
   }
 
   private anchorCharacter(hit: PlacementHit): void {
@@ -518,12 +622,27 @@ export class ReelLifeApp extends BaseScriptComponent {
       quantizeClip(clip, this.grid);
     }
 
-    this.timeline.add(clip);
+    // Bake in follow-through: limbs trail and whip, which hand-posing cannot
+    // produce because every joint is placed at the same instant.
+    const finished =
+      this.followThrough && this.character
+        ? applySecondaryMotion(clip, this.character.plan, DEFAULT_SECONDARY_MOTION)
+        : clip;
+
+    this.timeline.add(finished);
     this.panel.rebuild();
-    this.panel.select(clip.id);
-    this.saveReel();
+    this.panel.select(finished.id);
+    this.commitHistory(`add ${finished.name}`);
+
+    if (
+      this.character &&
+      shouldSuggestSmoothing(finished, poseableJointIds(this.character.plan))
+    ) {
+      this.setStatus(`${finished.name} is shaky — say "smooth it" to steady it`);
+      return;
+    }
     this.setStatus(
-      `${clip.name} added — ${clipDuration(clip).toFixed(1)}s at ${Math.round(this.grid.bpm)} BPM`
+      `${finished.name} added — ${clipDuration(finished).toFixed(1)}s at ${Math.round(this.grid.bpm)} BPM`
     );
   }
 
@@ -588,9 +707,25 @@ export class ReelLifeApp extends BaseScriptComponent {
   private onPlaybackFinished(): void {
     this.audio.stopMusic();
     this.caption.hide(getTime());
-    this.setStatus("That's your reel — hit Play Reel again to re-record it");
-    this.restorePose();
     this.setState("posing");
+
+    if (!this.character) {
+      return;
+    }
+
+    // Land on the strongest pose in the reel rather than wherever it stopped —
+    // that frame is the one worth holding while the credits-equivalent shows.
+    const poster = posterFrame(this.timeline, this.character.plan);
+    if (poster && this.player) {
+      this.player.seek(poster.globalT);
+      this.panel.setPlayhead(poster.globalT);
+      this.panel.select(poster.clipId);
+    } else {
+      this.restorePose();
+    }
+
+    const stats = reelStats(this.timeline, this.character.plan, this.grid.bpm);
+    this.setStatus(describeStats(stats));
   }
 
   /** Leave the puppet on its last captured pose rather than mid-tween. */
@@ -667,7 +802,180 @@ export class ReelLifeApp extends BaseScriptComponent {
   }
 
   // -------------------------------------------------------------------------
-  // 6. Persistence
+  // 6. Hands-free commands
+  // -------------------------------------------------------------------------
+
+  /** Run an editor command spoken aloud while both hands hold the puppet. */
+  private runCommand(command: VoiceCommand): void {
+    switch (command.kind) {
+      case "capture":
+        this.capturePose();
+        break;
+      case "new_take":
+        this.finishTake();
+        break;
+      case "play":
+        this.playReel();
+        break;
+      case "stop":
+        this.stopPlayback();
+        break;
+      case "undo":
+        this.undo();
+        break;
+      case "redo":
+        this.redo();
+        break;
+      case "delete_last":
+        this.deleteLastTake();
+        break;
+      case "mirror":
+        this.transformSelected("mirror");
+        break;
+      case "reverse":
+        this.transformSelected("reverse");
+        break;
+      case "smooth":
+        this.transformSelected("smooth");
+        break;
+      case "loop":
+        this.transformSelected("loop");
+        break;
+      case "faster":
+      case "slower":
+        this.cycleSpeed();
+        break;
+      case "shoot_mode":
+        this.cycleShootMode();
+        break;
+      case "next_mood":
+        this.cycleMood();
+        break;
+      case "onion":
+        this.toggleOnionSkin();
+        break;
+      case "none":
+        break;
+    }
+    this.log.info(`voice command: ${command.kind} ("${command.heard}")`);
+  }
+
+  /** Apply a non-destructive transform to the selected take. */
+  private transformSelected(kind: "mirror" | "reverse" | "smooth" | "loop"): void {
+    const clip = this.selectedClip();
+    if (!clip) {
+      this.setStatus("Select a take on the timeline first");
+      return;
+    }
+
+    const id = this.ids.next("clip");
+    const replacement =
+      kind === "mirror"
+        ? mirrorClip(clip, id)
+        : kind === "reverse"
+          ? reverseClip(clip, id)
+          : kind === "smooth"
+            ? smoothClip(clip, id)
+            : loopBlendClip(clip, id);
+
+    if (!replacement) {
+      this.setStatus(`${clip.name} is too short to ${kind}`);
+      return;
+    }
+
+    const index = this.timeline.indexOf(clip.id);
+    this.timeline.clips[index] = replacement;
+    this.panel.rebuild();
+    this.panel.select(replacement.id);
+    this.commitHistory(`${kind} ${clip.name}`);
+    this.setStatus(`${replacement.name}`);
+  }
+
+  private deleteLastTake(): void {
+    if (this.timeline.isEmpty()) {
+      this.setStatus("Nothing to delete");
+      return;
+    }
+    const clip = this.timeline.clips[this.timeline.clips.length - 1];
+    this.timeline.remove(clip.id);
+    this.panel.rebuild();
+    this.commitHistory(`delete ${clip.name}`);
+    this.setStatus(`Deleted ${clip.name} — say "undo" to get it back`);
+  }
+
+  private cycleShootMode(): void {
+    this.shootRate = createShootRate(nextShootMode(this.shootRate.mode));
+    if (this.player) {
+      this.player.setShootRate(this.shootRate);
+    }
+    this.updateButtonLabels();
+    this.setStatus(
+      this.shootRate.mode === "smooth"
+        ? "Smooth playback — good for flowing motion"
+        : `Shooting ${describeShootRate(this.shootRate)} — real stop-motion cadence`
+    );
+  }
+
+  // -------------------------------------------------------------------------
+  // 7. Undo
+  // -------------------------------------------------------------------------
+
+  private commitHistory(label: string): void {
+    this.history.commit(label, this.timeline.clips);
+    this.updateButtonLabels();
+    this.saveReel();
+  }
+
+  private undo(): void {
+    const entry = this.history.undo();
+    if (!entry) {
+      this.setStatus("Nothing to undo");
+      return;
+    }
+    this.applyHistoryEntry(entry.clips);
+    this.setStatus(`Undid ${this.history.redoLabel() || "that"}`);
+  }
+
+  private redo(): void {
+    const entry = this.history.redo();
+    if (!entry) {
+      this.setStatus("Nothing to redo");
+      return;
+    }
+    this.applyHistoryEntry(entry.clips);
+    this.setStatus(`Redid ${entry.label}`);
+  }
+
+  private applyHistoryEntry(clips: Clip[]): void {
+    this.timeline.clips = clips;
+    this.panel.rebuild();
+    this.updateButtonLabels();
+    this.saveReel();
+  }
+
+  // -------------------------------------------------------------------------
+  // 8. Coaching
+  // -------------------------------------------------------------------------
+
+  /**
+   * Show the most useful thing the app has to say about the reel right now.
+   * This is also the empty state: with nothing recorded it explains what to do.
+   */
+  private showHealth(): void {
+    if (!this.character) {
+      this.setStatus("Hold the mic and describe a character");
+      return;
+    }
+    const notes: HealthNote[] = reelHealth(this.timeline, this.character.plan);
+    if (notes.length === 0) {
+      this.setStatus("Looking good — hit Play Reel");
+      return;
+    }
+    this.setStatus(notes[0].message);
+  }
+
+  // -------------------------------------------------------------------------
+  // 9. Persistence
   // -------------------------------------------------------------------------
 
   private afterEdit(): void {
@@ -701,6 +1009,12 @@ export class ReelLifeApp extends BaseScriptComponent {
     this.grid = createBeatGrid(doc.bpm, 2);
     this.timeline.clips = doc.clips;
     this.panel.rebuild();
+    this.history.clear();
+    this.history.commit("restored", doc.clips);
+    for (const clip of doc.clips) {
+      this.ids.observe(clip.id);
+    }
+    this.ids.observe(doc.id);
     this.updateButtonLabels();
     this.setStatus(
       `Restored "${doc.title}" with ${doc.clips.length} takes — hold the mic to rebuild the character`

@@ -1,5 +1,4 @@
 import { AssembledCharacter } from "../Character/CharacterAssembler";
-import { newId } from "../Character/ReelStore";
 import { readJointPose } from "../Core/Convert";
 import { Log } from "../Core/Log";
 import {
@@ -10,6 +9,7 @@ import {
   createClip,
   poseDelta,
 } from "../Logic/Clip";
+import { IdFactory } from "../Logic/Ids";
 import { PoseSample } from "../Logic/PoseTypes";
 import { poseableJointIds } from "../Logic/RigPlan";
 
@@ -42,7 +42,10 @@ export class PoseRecorder {
   private lastSampleTime = 0;
   private lastSampledPose: PoseSample | null = null;
 
-  constructor(private character: AssembledCharacter) {
+  constructor(
+    private character: AssembledCharacter,
+    private ids: IdFactory
+  ) {
     this.jointIds = poseableJointIds(character.plan);
   }
 
@@ -72,7 +75,7 @@ export class PoseRecorder {
     }
     // Switching modes starts a new take rather than mixing cadences.
     const index = this.clipCounter++;
-    this.clip = createClip(newId("clip"), `Take ${index}`, source);
+    this.clip = createClip(this.ids.next("clip"), `Take ${index}`, source);
     this.log.info(`started ${source} clip "${this.clip.name}"`);
     return this.clip;
   }

@@ -4,6 +4,7 @@ import { AccentIndex, accentAtKeyframe, buildAccentIndex } from "../Logic/Accent
 import { Clip } from "../Logic/Clip";
 import { nearestKeyframeIndex, samplePose } from "../Logic/PoseInterpolator";
 import { ReelTimeline } from "../Logic/ReelTimeline";
+import { ShootRate, createShootRate, steppedTime } from "../Logic/Stepped";
 import { applyPoseTo } from "../Puppeteer/OnionSkin";
 
 /**
@@ -36,6 +37,7 @@ export class ReelPlayer {
   private currentClipIndex = -1;
   private lastAccentKey = "";
   private accents: AccentIndex = {};
+  private shootRate: ShootRate = createShootRate("twos");
 
   constructor(
     private character: AssembledCharacter,
@@ -58,6 +60,15 @@ export class ReelPlayer {
 
   currentTimeline(): ReelTimeline {
     return this.timeline;
+  }
+
+  /** Shooting on twos/threes, or smooth. Applied on the next sampled frame. */
+  setShootRate(rate: ShootRate): void {
+    this.shootRate = rate;
+  }
+
+  getShootRate(): ShootRate {
+    return this.shootRate;
   }
 
   elapsedSeconds(): number {
@@ -126,7 +137,10 @@ export class ReelPlayer {
       return;
     }
 
-    const pose = samplePose(cursor.clip, cursor.localT);
+    // Quantize to the film-frame grid before sampling, so the puppet holds
+    // each exposure instead of sliding continuously between poses.
+    const exposureT = steppedTime(cursor.localT, this.shootRate);
+    const pose = samplePose(cursor.clip, exposureT);
     if (pose) {
       applyPoseTo(this.character, pose);
     }
@@ -138,7 +152,7 @@ export class ReelPlayer {
     }
 
     if (allowAccents) {
-      this.fireAccents(cursor.clip, cursor.localT);
+      this.fireAccents(cursor.clip, exposureT);
     }
   }
 

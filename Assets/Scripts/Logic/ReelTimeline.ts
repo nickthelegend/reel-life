@@ -151,6 +151,22 @@ export class ReelTimeline {
     return null;
   }
 
+  /**
+   * Like `resolve`, but never wraps: time past the end holds the final pose
+   * even on a looping timeline.
+   *
+   * Scrubbing and seeking need this. Seeking to a moment that happens to sit
+   * exactly at the end of a looping reel would otherwise jump to the start —
+   * which is right for playback and wrong for every other use.
+   */
+  resolveClamped(globalT: number): TimelineCursor | null {
+    const wasLooping = this.loop;
+    this.loop = false;
+    const cursor = this.resolve(globalT);
+    this.loop = wasLooping;
+    return cursor;
+  }
+
   /** Caption that should be visible at a reel-global time, if any. */
   captionAt(globalT: number): string | null {
     const cursor = this.resolve(globalT);

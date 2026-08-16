@@ -149,10 +149,3 @@ export class ReelStore {
     this.log.info("cleared all stored reels");
   }
 }
-
-/** Stable-ish unique id without a uuid dependency. */
-export function newId(prefix: string): string {
-  const stamp = Date.now().toString(36);
-  const salt = Math.floor(Math.random() * 0x10000).toString(36);
-  return `${prefix}-${stamp}-${salt}`;
-}

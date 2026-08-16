@@ -143,3 +143,27 @@ test("removing a clip closes the gap in the timeline", () => {
     [1, 4],
   ]);
 });
+
+test("scrubbing never wraps, even on a looping reel", () => {
+  const timeline = new ReelTimeline();
+  timeline.add(clipOf("a", 1));
+  timeline.add(clipOf("b", 2));
+  timeline.loop = true;
+
+  // Exactly at the end: playback wraps to the start, scrubbing holds the end.
+  assert.equal(timeline.resolve(3)!.clip.id, "a");
+  assert.equal(timeline.resolveClamped(3)!.clip.id, "b");
+  assert.equal(timeline.resolveClamped(99)!.clip.id, "b");
+
+  assert.equal(timeline.loop, true, "scrubbing must not leave looping switched off");
+});
+
+test("clamped scrubbing agrees with normal resolve inside the reel", () => {
+  const timeline = new ReelTimeline();
+  timeline.add(clipOf("a", 1));
+  timeline.add(clipOf("b", 2));
+
+  for (const t of [0, 0.5, 1, 1.5, 2.9]) {
+    assert.equal(timeline.resolveClamped(t)!.clip.id, timeline.resolve(t)!.clip.id, `t=${t}`);
+  }
+});

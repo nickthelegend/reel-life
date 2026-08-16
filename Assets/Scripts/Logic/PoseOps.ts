@@ -159,14 +159,23 @@ export function jitterScore(clip: Clip, jointId: string): number {
   return total;
 }
 
-/** Average jitter per keyframe, so takes of different lengths compare. */
+/**
+ * Jitter per keyframe of the SHAKIEST joint, not the average across all of them.
+ *
+ * Averaging hides the thing you care about: a rig has a dozen joints and the
+ * user is usually holding one. Nine still limbs would dilute a badly shaking
+ * hand below any sensible threshold.
+ */
 export function jitterPerFrame(clip: Clip, jointIds: string[]): number {
   const usable = Math.max(1, clip.keyframes.length - 2);
-  let total = 0;
+  let peak = 0;
   for (const jointId of jointIds) {
-    total += jitterScore(clip, jointId);
+    const perFrame = jitterScore(clip, jointId) / usable;
+    if (perFrame > peak) {
+      peak = perFrame;
+    }
   }
-  return total / usable / Math.max(1, jointIds.length);
+  return peak;
 }
 
 /** Hand tremor above this (cm per frame) is worth offering to smooth away. */

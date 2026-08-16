@@ -28,7 +28,7 @@ for the SPECS hackathon.
 you capture a shareable file the same way every Spectacles demo does, by screen
 recording the preview or using the device capture button. The UI says so plainly.
 
-## The two features I'd point a judge at
+## The features I'd point a judge at
 
 **1. Onion skinning.** Translucent ghosts of your last two captured poses stay
 standing where you left them while you pose the next one. It's the tool real
@@ -36,19 +36,46 @@ stop-motion animators live by, it's never existed in AR before, and it turns
 "fiddling with a toy" into "animating" — you can see the arc you're building
 instead of holding it in your head. `Puppeteer/OnionSkin.ts`
 
-**2. Beat-locked puppeteering.** The app measures the tempo you actually posed
+**2. Shooting on twos.** Real stop-motion is one photograph held for two film
+frames — 12 image updates against 24fps projection. That stutter is the entire
+visual signature of the medium; smooth interpolation reads as CG no matter how
+good the poses are. Playback quantizes onto a film-frame grid, so the puppet
+holds each exposure exactly like a camera would. One button cycles twos →
+threes → ones → smooth. `Logic/Stepped.ts`
+
+**3. Follow-through.** When you swing a puppet's shoulder its hand doesn't
+arrive at the same instant — it trails, whips past, and settles. Hand-posing in
+AR physically cannot produce that, because you place every joint at its final
+position at the same moment. So it's computed: the parent chain's world rotation
+change over a lag window is conjugated into the child's local frame and
+partially cancelled, then released as overshoot when the parent stops. You pose
+five keyframes; the puppet moves like it has weight. `Logic/SecondaryMotion.ts`
+
+**4. Beat-locked puppeteering.** The app measures the tempo you actually posed
 at, then snaps every stop-motion keyframe onto the beat grid of the track that's
-playing. Switch mood mid-session and the whole reel re-grids to the new tempo —
-the puppet lands its poses on the beat, every time. A wobbly hand-posed
+playing. Switch mood mid-session and the whole reel re-grids. A wobbly hand-posed
 performance suddenly reads as choreography. `Logic/BeatGrid.ts`
+
+**5. Performance retargeting.** Record a take on your dragon, generate a robot,
+and play the dragon's performance on it. Poses are keyed by joint name, so the
+spine maps exactly and limbs map through an equivalence table — a wing drives an
+arm drives a front leg. Only the delta from rest transfers, scaled by height
+ratio, so limbs stay attached. `Logic/Retarget.ts`
+
+Plus the editor you'd expect and hackathon projects usually skip: undo/redo,
+split, merge, reverse, ping-pong, loop-close, mirror, tremor smoothing, motion
+arcs, and hands-free voice commands so you never have to let go of the puppet to
+press a button.
 
 ## Layout
 
 ```
 Assets/Scripts/
   Logic/          engine-agnostic core — runs and is unit tested in plain Node
-    Vec, Easing, PoseTypes, RigPlan, Clip, PoseInterpolator,
-    ReelTimeline, BeatGrid, AccentTrack, MusicPrompt, ReelDocument
+    Vec, Easing, PoseTypes, Ids, RigPlan, Clip, ClipOps, PoseOps,
+    PoseInterpolator, Stepped, SecondaryMotion, Kinematics, Retarget,
+    ReelTimeline, BeatGrid, AccentTrack, EditHistory, VoiceCommands,
+    MusicPrompt, ReelStats, ReelDocument
   Core/           app orchestrator, engine<->logic conversion, logging
   Character/      Snap3D generation, rig assembly, persistent storage
   Voice/          hold-to-talk ASR
@@ -60,7 +87,7 @@ Assets/Scripts/
   UI/             world-space buttons
 typings/          vendored subset of the Lens Studio / SIK / RSG APIs, for
                   offline typechecking only — the editor never sees these
-tests/            83 tests over the Logic layer, incl. a full flow rehearsal
+tests/            220 tests over the Logic layer, incl. a full flow rehearsal
 ```
 
 The split is deliberate: everything that can be decided without a scene graph —
@@ -75,7 +102,7 @@ npm run verify
 ```
 
 Runs a typecheck of the whole Lens source tree against the vendored API
-declarations, then the 83-test suite. `tests/flow.test.ts` is the end-to-end
+declarations, then the 220-test suite. `tests/flow.test.ts` is the end-to-end
 rehearsal: build a rig from a sentence, record three takes, quantize to the beat,
 reorder, trim, caption, save, reload, and play back frame by frame asserting the
 pose is finite at every frame, clips play in the edited order, captions appear
@@ -89,8 +116,10 @@ packages, paste your gateway tokens, and wire the inputs on `ReelLifeApp`.
 
 ## Honest status
 
-- **Verified here:** the whole `Logic/` layer (83 tests, all passing) and a
-  typecheck of every Lens source file.
+- **Verified here:** the whole `Logic/` layer (220 tests, all passing) and a
+  typecheck of every Lens source file. See
+  [docs/FEATURE_IDEAS.md](docs/FEATURE_IDEAS.md) for exactly which features are
+  test-verified versus typecheck-only.
 - **Not verified here:** anything requiring the editor. Lens Studio is not
   installed on the machine this was built on, so no scene was assembled, no
   preview was run, and no live Snap3D call was made. The Snap3D and SIK call

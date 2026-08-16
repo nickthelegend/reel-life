@@ -132,6 +132,20 @@ export function qMultiply(a: Quat, b: Quat): Quat {
   };
 }
 
+/** Rotate a vector by a quaternion: v' = q · v · q⁻¹, expanded. */
+export function qRotate(q: Quat, v: Vec3): Vec3 {
+  // t = 2 * (q.xyz × v);  v' = v + q.w * t + q.xyz × t
+  const tx = 2 * (q.y * v.z - q.z * v.y);
+  const ty = 2 * (q.z * v.x - q.x * v.z);
+  const tz = 2 * (q.x * v.y - q.y * v.x);
+
+  return {
+    x: v.x + q.w * tx + (q.y * tz - q.z * ty),
+    y: v.y + q.w * ty + (q.z * tx - q.x * tz),
+    z: v.z + q.w * tz + (q.x * ty - q.y * tx),
+  };
+}
+
 export function qConjugate(a: Quat): Quat {
   return { x: -a.x, y: -a.y, z: -a.z, w: a.w };
 }

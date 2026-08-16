@@ -77,6 +77,10 @@ export class ReelPlayer {
 
   play(now: number, fromStart = true): void {
     if (this.timeline.isEmpty()) {
+      // Stop rather than just refusing: if the last take was deleted while a
+      // reel was mid-play, leaving `playing` set strands the player advancing
+      // against a timeline that can never resolve.
+      this.stop();
       this.log.warn("nothing to play — the timeline is empty");
       return;
     }

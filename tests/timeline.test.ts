@@ -167,3 +167,14 @@ test("clamped scrubbing agrees with normal resolve inside the reel", () => {
     assert.equal(timeline.resolveClamped(t)!.clip.id, timeline.resolve(t)!.clip.id, `t=${t}`);
   }
 });
+
+test("an emptied timeline reports empty so a player can stop rather than stall", () => {
+  const timeline = new ReelTimeline();
+  timeline.add(clipOf("a", 1));
+  assert.equal(timeline.isEmpty(), false);
+
+  timeline.remove("a");
+  assert.equal(timeline.isEmpty(), true);
+  assert.equal(timeline.resolve(0.5), null, "a stalled player would advance against null forever");
+  assert.equal(timeline.resolveClamped(0.5), null);
+});

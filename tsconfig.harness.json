@@ -1,0 +1,22 @@
+{
+  "//": "Compiles the REAL shipping Logic modules to browser ESM for harness/. No module is reimplemented; the browser loads the same source the Lens compiles.",
+  "compilerOptions": {
+    "target": "ES2020",
+    "module": "ES2020",
+    "moduleResolution": "node",
+    "lib": ["ES2020"],
+    "strict": true,
+    "strictPropertyInitialization": false,
+    "experimentalDecorators": true,
+    "outDir": "harness/dist",
+    "rootDir": "Assets/Scripts",
+    "forceConsistentCasingInFileNames": true,
+    "types": []
+  },
+  "include": [
+    "Assets/Scripts/Logic/**/*.ts",
+    "Assets/Scripts/Core/Log.ts",
+    "Assets/Scripts/Character/ReelStore.ts",
+    "typings/lens-studio.d.ts"
+  ]
+}

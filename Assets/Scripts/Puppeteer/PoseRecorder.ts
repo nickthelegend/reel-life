@@ -7,11 +7,11 @@ import {
   appendKeyframe,
   captureStopMotionPose,
   createClip,
-  poseDelta,
 } from "../Logic/Clip";
 import { IdFactory } from "../Logic/Ids";
 import { PoseSample } from "../Logic/PoseTypes";
 import { poseableJointIds } from "../Logic/RigPlan";
+import { PERFORMANCE_SAMPLE_HZ, SampleGate } from "../Logic/SampleGate";
 
 /**
  * Captures what the user does to the puppet.
@@ -22,15 +22,7 @@ import { poseableJointIds } from "../Logic/RigPlan";
  *    sampled on a fixed interval like a mocap take.
  */
 
-/** Live sampling rate. Fast enough to catch a gesture, slow enough to stay light. */
-export const PERFORMANCE_SAMPLE_HZ = 12;
-
-/** Samples this similar to the previous one are dropped. */
-const IDLE_POSITION_EPSILON_CM = 0.2;
-const IDLE_ANGLE_EPSILON_RAD = 0.01;
-
-/** ...but never leave a gap longer than this, so held poses still read. */
-const MAX_SAMPLE_GAP_SECONDS = 1;
+export { PERFORMANCE_SAMPLE_HZ };
 
 export class PoseRecorder {
   private log = new Log("Recorder");
@@ -38,9 +30,7 @@ export class PoseRecorder {
   private clip: Clip | null = null;
   private clipCounter = 1;
   private recording = false;
-  private performanceStart = 0;
-  private lastSampleTime = 0;
-  private lastSampledPose: PoseSample | null = null;
+  private gate = new SampleGate(PERFORMANCE_SAMPLE_HZ);
 
   constructor(
     private character: AssembledCharacter,
@@ -109,9 +99,7 @@ export class PoseRecorder {
   startPerformance(now: number): Clip {
     const clip = this.ensureClip("performance");
     this.recording = true;
-    this.performanceStart = now;
-    this.lastSampleTime = -Infinity;
-    this.lastSampledPose = null;
+    this.gate.start(now);
     this.log.info(`recording performance into "${clip.name}"`);
     return clip;
   }
@@ -121,29 +109,11 @@ export class PoseRecorder {
     if (!this.recording || !this.clip) {
       return;
     }
-    const interval = 1 / PERFORMANCE_SAMPLE_HZ;
-    if (now - this.lastSampleTime < interval) {
-      return;
-    }
-
     const pose = this.currentPose();
-    const elapsed = now - this.performanceStart;
-
-    if (this.lastSampledPose) {
-      const delta = poseDelta(this.lastSampledPose, pose);
-      const stillEnough =
-        delta.maxPosition < IDLE_POSITION_EPSILON_CM &&
-        delta.maxAngle < IDLE_ANGLE_EPSILON_RAD;
-      const gap = now - this.lastSampleTime;
-      if (stillEnough && gap < MAX_SAMPLE_GAP_SECONDS) {
-        // Nothing moved; skip the sample rather than storing a duplicate.
-        return;
-      }
+    const decision = this.gate.offer(now, pose);
+    if (decision.record) {
+      appendKeyframe(this.clip, { t: decision.elapsed, joints: pose });
     }
-
-    appendKeyframe(this.clip, { t: elapsed, joints: pose });
-    this.lastSampleTime = now;
-    this.lastSampledPose = pose;
   }
 
   stopPerformance(): Clip | null {
@@ -167,7 +137,6 @@ export class PoseRecorder {
     }
     const clip = this.clip;
     this.clip = null;
-    this.lastSampledPose = null;
     if (!clip || clip.keyframes.length === 0) {
       return null;
     }

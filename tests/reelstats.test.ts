@@ -134,6 +134,36 @@ test("the poster frame's time seeks straight to it", () => {
   assert.equal(cursor.clip.id, "b");
 });
 
+test("a poster frame on a clip's last pose seeks back to itself, not the next take", () => {
+  // Regression: found in the browser. The extreme pose is the LAST keyframe of
+  // a non-final take, so its raw time lands exactly on the segment boundary and
+  // resolve() hands that moment to the following take.
+  const a = createClip("a", "Take 1", "stopmotion");
+  [0, 0, 4, 8].forEach((x, i) => {
+    const pose = restPose(plan);
+    pose.head.p = v3Add(pose.head.p, v3(x, 0, 0));
+    appendKeyframe(a, { t: i * 0.4, joints: pose });
+  });
+  const b = createClip("b", "Take 2", "stopmotion");
+  [0, -1].forEach((x, i) => {
+    const pose = restPose(plan);
+    pose.head.p = v3Add(pose.head.p, v3(x, 0, 0));
+    appendKeyframe(b, { t: i * 0.4, joints: pose });
+  });
+
+  const timeline = timelineOf(a, b);
+  const poster = posterFrame(timeline, plan)!;
+  assert.equal(poster.clipId, "a");
+  assert.equal(poster.keyframeIndex, 3, "the x=8 pose is the extreme one");
+
+  const cursor = timeline.resolveClamped(poster.globalT)!;
+  assert.equal(cursor.clip.id, "a", "seeking to the poster time must land on its own take");
+  assert.ok(
+    poster.globalT < timeline.segments()[0].end,
+    "the poster time must sit strictly inside its own segment"
+  );
+});
+
 test("an empty reel has no poster frame", () => {
   assert.equal(posterFrame(new ReelTimeline(), plan), null);
 });

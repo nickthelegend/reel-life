@@ -3,7 +3,7 @@ import { isOverlong } from "./ClipOps";
 import { arcRatio, extremityJoints, jointArc, worldTravel } from "./Kinematics";
 import { jitterPerFrame, shouldSuggestSmoothing } from "./PoseOps";
 import { PoseSample } from "./PoseTypes";
-import { ReelTimeline } from "./ReelTimeline";
+import { ReelTimeline, TimelineSegment } from "./ReelTimeline";
 import { RigPlan, poseableJointIds } from "./RigPlan";
 import { qAngle, v3Distance } from "./Vec";
 
@@ -124,6 +124,23 @@ export interface PosterFrame {
   score: number;
 }
 
+/**
+ * Keep a reel-global time strictly inside the segment it belongs to.
+ *
+ * A clip's final keyframe sits exactly on its segment's end, and segment
+ * lookup treats `end` as belonging to the NEXT clip — so seeking to a poster
+ * frame that happens to be a clip's last pose would land on the following
+ * take's first pose instead. Nudging back by a hair keeps the time pointing at
+ * the pose it names.
+ */
+function timeInsideSegment(segment: TimelineSegment, t: number): number {
+  const epsilon = 1e-4;
+  if (t < segment.end - epsilon) {
+    return t;
+  }
+  return Math.max(segment.start, segment.end - epsilon);
+}
+
 export function posterFrame(timeline: ReelTimeline, plan: RigPlan): PosterFrame | null {
   if (timeline.isEmpty()) {
     return null;
@@ -188,7 +205,10 @@ export function posterFrame(timeline: ReelTimeline, plan: RigPlan): PosterFrame 
           clipId: clip.id,
           clipIndex,
           keyframeIndex: i,
-          globalT: segments[clipIndex].start + (frames[i].t - start),
+          globalT: timeInsideSegment(
+            segments[clipIndex],
+            segments[clipIndex].start + (frames[i].t - start)
+          ),
           score,
         };
       }
